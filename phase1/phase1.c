@@ -173,6 +173,17 @@ int P1_GetState(int PID) {
   return 0;
 }
 
+/*
+ DumpProcesses
+ prints information about each process for debuging purposes
+ 
+ */
+
+void P1_DumpProcesses(void) {
+        //do somthing here
+}
+
+
 /* ------------------------------------------------------------------------
    Name - sentinel
    Purpose - The purpose of the sentinel routine is two-fold.  One
