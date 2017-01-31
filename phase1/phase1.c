@@ -112,6 +112,15 @@ void finish(int argc, char **argv)
    ------------------------------------------------------------------------ */
 int P1_Fork(char *name, int (*f)(void *), void *arg, int stacksize, int priority, int tag)
 {
+    if (tag != 0 || tag != 1) {
+        return -4;
+    }
+    if (priority < 0) {
+        return -3;
+    }
+    if (stacksize < USLOSS_MIN_STACK) {
+        return -2;
+    }
     int newPid = 0;
     /* newPid = pid of empty PCB here */
     procTable[newPid].startFunc = f;
