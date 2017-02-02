@@ -17,6 +17,12 @@ typedef struct PCB {
     USLOSS_Context      context;
     int                 (*startFunc)(void *);   /* Starting function */
     void                 *startArg;             /* Arg to starting function */
+    int                 priority;
+    int                 tag;
+    // 0 = running, 1 = ready, 2 = unusd, 3 = quit, 4 = waiting on semaphore
+    int                 state;
+    int                 pid;
+    char                * name;
 } PCB;
 
 
@@ -62,17 +68,20 @@ void startup(int argc, char **argv)
 {
 
   /* initialize the process table here */
+  procTable = malloc(sizeof(PCB));
 
   /* Initialize the Ready list, Blocked list, etc. here */
+
 
   /* Initialize the interrupt vector here */
 
   /* Initialize the semaphores here */
 
+
   /* startup a sentinel process */
   /* HINT: you don't want any forked processes to run until startup is finished.
    * You'll need to do something  to prevent that from happening.
-   * Otherwise your sentinel will start running as soon as you fork it and 
+   * Otherwise your sentinel will start running as soon as you fork it and
    * it will call P1_Halt because it is the only running process.
    */
   P1_Fork("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 6, 0);
@@ -109,6 +118,14 @@ void finish(int argc, char **argv)
    Returns - the process id of the created child or an error code.
    Side Effects - ReadyList is changed, procTable is changed, Current
                   process information changed
+
+
+
+                  USLOSS_Context      context;
+                  int                 (*startFunc)(void *);   /* Starting function
+                  void                 *startArg;             /* Arg to starting function
+                  int                 priority;
+                  int                 tag;
    ------------------------------------------------------------------------ */
 int P1_Fork(char *name, int (*f)(void *), void *arg, int stacksize, int priority, int tag)
 {
@@ -122,10 +139,30 @@ int P1_Fork(char *name, int (*f)(void *), void *arg, int stacksize, int priority
         return -2;
     }
     int newPid = 0;
+
+    int i;
+
+    for(i = 0; i< P1_MAXPROC; i++){
+      if(procTable[i].state == 0){
+          procTable[i].priority = priority;
+          procTable[i].state = 1;
+          procTable[i].pid = i;
+          pid = i;
+          //initialize context?
+          //initialize priority?
+          //procTable[i].tag = tag;
+      }
+    }
     /* newPid = pid of empty PCB here */
     procTable[newPid].startFunc = f;
     procTable[newPid].startArg = arg;
+    procTable[newPid].name = strcpy(name);
+
+    char stack0[stacksize];
+
     // more stuff here, e.g. allocate stack, page table, initialize context, etc.
+    USLOSS_ContextInit(&procTable[newPid].context, stack0, sizeof(stack0), NULL, f);
+
     return newPid;
 } /* End of fork */
 
@@ -159,6 +196,7 @@ void launch(void)
    Side Effects - the currently running process quits
    ------------------------------------------------------------------------ */
 void P1_Quit(int status) {
+  procTable[pid].status= 3;
   // Do something here.
 }
 
@@ -170,17 +208,31 @@ void P1_Quit(int status) {
    Side Effects - none
    ------------------------------------------------------------------------ */
 int P1_GetState(int PID) {
+  int i;
+  for(i =0; i<P1_MAXPROC; i++){
+    if(procTable[i].pid = PID) return procTable[i].state;
+  }
   return 0;
 }
 
 /*
  DumpProcesses
  prints information about each process for debuging purposes
- 
+
+
+ int                 state;
+ int                 pid;
+ char                * name;
  */
 
 void P1_DumpProcesses(void) {
-        //do somthing here
+        int i;
+        for(i = 0; i < pid; i++){
+          printf("Process Name: %s\n", procTable[i].name);
+          printf("PID: %d\n", procTable[i].pid);
+          printf("State: %d\n", procTable[i].state);
+
+        }
 }
 
 
