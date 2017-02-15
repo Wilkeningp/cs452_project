@@ -31,7 +31,7 @@ int Child(void *arg) {
     return status;
 }
 
-int P2_Startup(void *notused) 
+int P2_Startup(void *notused)
 {
     int pid;
     int status = 0;

@@ -10,7 +10,7 @@
 #include "usyscall.h"
 
 /*
- * Maximum number of processes. 
+ * Maximum number of processes.
  */
 
 #define P1_MAXPROC  50
@@ -23,11 +23,11 @@
 
 typedef void *P1_Semaphore;
 
-/* 
+/*
  * Function prototypes for this phase.
  */
 
-extern  int     P1_Fork(char *name, int(*func)(void *), void *arg, 
+extern  int     P1_Fork(char *name, int(*func)(void *), void *arg,
                         int stackSize, int priority, int tag);
 extern  void    P1_Quit(int status);
 extern  int     P1_Join(int tag, int *status);
@@ -50,5 +50,17 @@ extern  int     P2_Startup(void *arg);
 
 extern  USLOSS_PTE  *P3_AllocatePageTable(int pid);
 extern  void        P3_FreePageTable(int pid);
+
+typedef struct PCB {
+    USLOSS_Context      context;
+    int                 (*startFunc)(void *);   /* Starting function */
+    void                 *startArg;             /* Arg to starting function */
+    int                 priority;
+    int                 tag;
+    // 0 = running, 1 = ready, 2 = unusd, 3 = quit, 4 = waiting on semaphore
+    int                 state;
+    int                 pid;
+    char                * name;
+} PCB;
 
 #endif /* _PHASE1_H */
