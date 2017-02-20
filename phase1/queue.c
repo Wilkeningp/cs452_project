@@ -16,7 +16,7 @@ void display_pqueue();
 
 PCB pri_que[MAX];
 int front, rear;
-
+/**
 void main()
 {
     int n, ch;
@@ -55,6 +55,7 @@ void main()
         }
     }
 }
+**/
 
 /* Function to create an empty priority queue */
 void create()
