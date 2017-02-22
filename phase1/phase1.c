@@ -15,35 +15,30 @@
 #include "usloss.h"
 #include "phase1.h"
 
-/* -------------------------- Globals ------------------------------------- */
-
-int clockTicks = 0;
-int clockSum = 0;
-
+/* -------------------------- Structs ------------------------------------- */
+struct node;
 
 typedef struct PCB {
     USLOSS_Context context;
     int priority;
     int pid;
     char name[MAXNAME];
-    int (* start_func) (char *);
+    int (* start_func) (void *);
     char *stack;
     int stackSize;
     // 0 = running, 1 = ready, 2 = unusd, 3 = quit, 4 = waiting on semaphore
     int status;
     int timeCPU;
     int parentID;
-    char startArg[MAXARG];
-     PCB *childProcPtr;
-     PCB *nextProcPtr;
-     PCB *sibilingPtr;
+    void *startArg;
+    // PCB *childProcPtr;
+    int numOfChildren;
+    // PCB *nextProcPtr;
+    // PCB *sibilingPtr;
+    // PCB *zombieProcPtr;
+    // PCB *nextZombieSiblingPtr
     /*
-    int             numOfChildren;
-
-
    procPtr         nextSiblingPtr;
-   procPtr	       zombieProcPtr;
-   procPtr	       nextZombieSiblingPtr;
    procPtr         zappedPtrList;
    procPtr         nextZappedSiblingPtr;
    int             quitStatus;
@@ -51,20 +46,37 @@ typedef struct PCB {
 
 } PCB;
 
-PCB * curProc;
+typedef struct node {
+  PCB *pcb;
+  struct node *next;
+} queueNode;
+
+typedef struct {
+  int id;
+  unsigned int count;
+  char *name;
+  int inUse;
+  queueNode *queue;
+} Semaphore;
+
+/* -------------------------- Globals ------------------------------------- */
+
+int clockTicks = 0;
+int clockSum = 0;
+
+//PCB * curProc;
 
 PCB *blockPtr;
-PCB *readyPtr;
-
-
+queueNode *readyQueue;
 
 /* the process table */
 static PCB procTable[P1_MAXPROC];
+static Semaphore semTable[P1_MAXSEM];
+int usedSemaphores = 0;
 PCB cur;
 
-
 /* current process ID */
-int pid = -1;
+int currentpid = -1;
 
 /* number of processes */
 
@@ -76,9 +88,9 @@ static int sentinel(void *arg);
 static void launch(void);
 static void interruptsOff(void);
 static void interruptsOn(void);
+static void addToPriorityQueue(int pid, PCB **table, int priority);
 
-
-
+int checkInvaildSemaphore (P1_Semaphore);
 
 
 
@@ -98,13 +110,13 @@ void dispatcher()
 {
 
   PCB *curProc, *nextProc;
-  nextProc = readyPtr;
+  nextProc = readyQueue;
   curProc = current; //need to set current
   current = nextProc;
   int curProc_time = Current_CPUtime;
-  readyPtr = readyPtr->nextProc;
+  readyQueue = readyQueue->nextProc;
   if(nextProc->status == 1 || nextProc->status == 0)
-      addToQueue(nextProc->pid,&readyPtr,nextProc->priority);
+      addToPriorityQueue(nextProc->pid,&readyQueue,nextProc->priority);
   nextProc->status = 0;
   if(curProc->status != 2 && curProc_time != -1 && curProc->pid != nextProc->pid){
     if(curProc->timeCPU == -1)
@@ -142,12 +154,10 @@ void dispatcher()
 void startup(int argc, char **argv)
 {
   /* initialize the process table here */
-
-
   int i;
   timeCPU = -1;
   for(i = 0; i<P1_MAXPROC; i++){
-    procTable[i].name = (char *) malloc(sizeof(char) * MAXNAME);
+    procTable[i].name = NULL;
     procTable[i].priority = -1;
     procTable[i].state = -1;
     procTable[i].pid = -1;
@@ -157,17 +167,23 @@ void startup(int argc, char **argv)
     procTable[i].status = -1;
     procTable[i].timeCPU = -1;
     procTable[i].parentID = -1;
-    procTable[i].startArg = (char *) malloc(sizeof(char) * MAXARG);
   }
 
   /* Initialize the Ready list, Blocked list, etc. here */
-  readyPtr = NULL;
+  readyQueue = NULL;
   blockPtr = NULL;
 
   /* Initialize the interrupt vector here */
   //define prototype above, USLOSS_IntVec[USLOSS_CLOCK_INT] =, create function
 
   /* Initialize the semaphores here */
+  for(i = 0; i < P1_MAXSEM; i++) {
+      semTable[i].id = i;
+      semTable[i].count = 0;
+      semTable[i].inUse = 0;
+      semTable[i].name = NULL;
+      semTable[i].queue = NULL;
+  }
 
 
   /* startup a sentinel process */
@@ -224,70 +240,77 @@ int P1_Fork(char *name, int (*f)(void *), void *arg, int stacksize, int priority
       USLOSS_Console("Error, not in kernel mode.");
       USLOSS_Halt(1);
   }
-  //disableInterrupts()
+  //disable Interrupts()
     if (tag != 0 && tag != 1) {
+        //enable interrupts()
         return -4;
     }
-    if (priority < 0 || priority >= 6) {
-        return -3;
+    if (priority < 0 || priority > 5) {
+        if (priority == 6 && strcmp(name, "sentinel") == 0) {
+          ;
+        } else {
+          //enable interrupts
+          return -3;
+        }
     }
     if (stacksize < USLOSS_MIN_STACK) {
+        //enable interrupts
         return -2;
     }
-
     if(name == NULL || f == NULL){
-      return -1;
+      USLOSS_Console("Error, process name or function is not set");
+      USLOSS_Halt(1);
     }
-
-    int newPid = 0;
     if(strlen(name) >= MAXNAME-1){
       USLOSS_Console("Error, process name too long");
       USLOSS_Halt(1);
     }
-    if(arg == NULL){
-      arg = "";
-    }else if(strlen(arg) >= MAXARG-1){
-      USLOSS_Console("Error, argument too long");
-      USLOSS_HAlt(1);
-    }
-
-
-    int i;
-    for(i = 0; i < P1_MAXPROC; i++){
-      if(procTable[i].state == -1){
-        newPid = i;
-        procTable[i].priority = priority;
-        procTable[i].state = 1;
-        procTable[i].pid = newPid;
-        procTable[i].startFunc = f;
-        procTable[i].startArg = strdup(arg);
-        procTable[i].name = strdup(name);
-        break;
-      }
-    }
-    numProcs++;
     /*
-    if(cur != NULL && f != &processStart)
-      set parentid = currentpid
-    else parentid = -2;
+    else if(strlen(arg) >= MAXARG-1){
+      USLOSS_Console("Error, argument too long");
+      USLOSS_Halt(1);
+    }
     */
 
-
-    /* newPid = pid of empty PCB here */
-
+    int newPid = -1;
+    int i = 0;
+    
+    while (newPid == -1 && i < 50) {
+      if (procTable[i].state = -1) {
+        newPid = i;
+      }
+      i++;
+    }
+    if (newPid == -1) {
+      //enable interrupts
+      return -1;
+    }
+    numProcs++;
+    procTable[newPid].pid = newPid;
+    procTable[newPid].priority = priority;
+    procTable[newPid].state = 1;
+    procTable[newPid].start_func = f;
+    procTable[newPid].startArg = arg;
+    procTable[newPid].name = strdup(name);
+    
     char *stack0 =(char *) malloc(stacksize * sizeof(char));
+    strcpy(procTable[newPid].stack, stack0);
+    procTable[newPid].stacksize = stacksize;
+    
     // more stuff here, e.g. allocate stack, page table, initialize context, etc.
-    USLOSS_ContextInit(&(procTable[i].context), stack0, stacksize, P3_AllocatePageTable, launch);
+    USLOSS_ContextInit(&(procTable[newPid].context), procTable[newPid].stack, procTable[newPid].stacksize, P3_AllocatePageTable, launch);
 
-    addToQueue(procTable[i].pid,&readyPtr,priority);
+    addToPriorityQueue(procTable[newPid].pid,&readyQueue,priority);
+    procTable[newPid].status = 1;
+    /*
     if(priority != SENTINELPRIORITY){
-      procTable[i].status = 1;
-      dispatcher();
+      procTable[newPid].status = 1;
     }else{
       //current = &proctable[i]
 
     }
-    return i;
+    */
+    return newPid;
 } /* End of fork */
 
 
@@ -316,6 +339,11 @@ void launch(void)
 } /* End of launch */
 
 /* ------------------------------------------------------------------------
+   Name - P1_Join
+   Purpose - Wait for a child process (if one exists) to quit.
+   Parameters - A int tag of the parent process, 
+
+/* ------------------------------------------------------------------------
    Name - P1_Quit
    Purpose - Causes the process to quit and wait for its parent to call P1_Join.
    Parameters - quit status
@@ -327,9 +355,56 @@ void P1_Quit(int status) {
       USLOSS_Console("Error, not in kernel mode.");
       USLOSS_Halt(1);
   }
-  procTable[pid].state= 3;
+  //procTable[pid].state= 3;
+  //TODO:: disable interrupts
   numProcs--;
   // Do something here.
+
+  // Check for Children Still Active
+  if (Current->childProcPtr != NULL) {
+    USLOSS_Console("Error, Childern still active.");
+    USLOSS_Halt(1);
+  }
+
+  /*
+  remove Zombie processes
+  can leak memory though.
+  */
+
+  PCB tempProc = Current->zombieProcPtr;
+  while (tempProc != NULL) {
+    free((*tempProc).name);
+    free((*tempProc).arg);
+    (*tempProc).pid = -1;
+    (*tempProc).status = -1;
+    (*tempProc).numOfChildren = 0;
+    (*tempProc).nextProcPtr = NULL;
+    (*tempProc).childProcPtr = NULL;
+    (*tempProc).zombieProcPtr = NULL;
+    (*tempProc).nextZombieSiblingPtr = NULL;
+    (*tempProc).zappedPtrList = NULL;
+    (*tempProc).nextZappedSiblingPtr = NULL;
+    (*tempProc).context = (USLOSS_Context) NULL;
+    (*tempProc).priority = -1;
+    (*tempProc).start_func = NULL;
+    (*tempProc).stack = NULL;
+    (*tempProc).stacksize = NULL;
+    (*tempProc).status = -1;
+    (*tempProc).parentID = -1;
+    (*tempProc).timeCPU = -1;
+    tempProc = tempProc->nextZombieSiblingPtr;
+  }
+
+  tempProc = Current->zappedPtrList;
+  while (tempProc != NULL) {
+    tempProc->status = 1;
+    deleteFromQueue(tempProc->pid, &blockPtr);
+    addToPriorityQueue(tempProc->pid, &readyQueue, procTable[tempProc->pid].priority);
+    tempProc = tempProc->nextZappedSiblingPtr;
+  }
+
+
+
 }
 
 /* ------------------------------------------------------------------------
@@ -396,28 +471,38 @@ int sentinel (void *notused)
 } /* End of sentinel */
 
 /*
-
+    Add a process to a Priority Queue
 */
-void addToQueue(int pid, PCB **table, int priority){
-  if(table == NULL){
-    *table = &procTable[pid];
+void addToPriorityQueue(int pid, queueNode **queue, int priority){
+  //disable interrupts
+  queueNode *new = malloc(sizeof(queueNode));
+  new->next = NULL;
+  new->pcb = &procTable[pid];
+  if(*queue == NULL){
+    *queue = new;
+    //enable interrupts
     return;
   }
-  PCB *tmp = *table;
-  if(tmp->priority > priority){
-    procTable[pid].nextProcPtr = *table;
-    *table = &procTable[pid];
+  
+  if((*queue)->pcb->priority > priority){
+    new.next = *queue;
+    *queue = new;
+    //enable interrupts
     return;
   }
-  PCB *prev = NULL;
-  PCB *cur = *table;
+
+  queueNode *prev = *queue;
+  queueNode *cur = (*queue)->next;
   while(cur->priority <= priority){
     prev = cur;
-    cur = cur->nextProcPtr;
+    cur = cur->next;
   }
-  prev->nextProcPtr = &procTable[pid];
-  procTable[pid].nextProcPtr = cur;
+  new->next = prev->next;
+  prev->next = new;
+  //enable interrupts
 }
+
+/*
 void addChild(PCB  ins, PCB **table){
   if(*table == NULL){
     *table = ins;
@@ -428,4 +513,143 @@ void addChild(PCB  ins, PCB **table){
   }
   cur->nextSiblingPtr = ins;
   node->nextSiblingPtr = NULL;
+}
+*/
+
+/*
+void deleteFromQueue(int pid, PCB* list) {
+  if (list == NULL) {
+    return;
+  }
+  if ((*list)->pid == pid) {
+    PCB temp = (*list)->nextProc;
+    (*list)->nextProcPtr = NULL;
+    (*list) = temp; 
+    return;
+  } else {
+    PCB prevProc = *list;
+    PCB curProc = *list;
+    while (curProc != NULL) {
+      if ((curProc)->pid == pid) {
+        (prevProc)->nextProcPtr = (curProc)->nextProcPtr;
+        (curProc)->nextProcPtr = NULL;
+        return;
+      }
+      prevProc = curProc;
+      curProc = (curProc->nextProcPtr);
+    }
+  }
+}
+*/
+
+int P1_SemCreate (char *name; unsigned int value, P1_Semaphore *sem) {
+  //disable interrupts
+  if (name == NULL) {
+    //enable interrupts
+    return -3;
+  }
+  int i;
+  for(i=0; i < usedSemaphores; i++) {
+    if(strcmp(name, semTable[i].name) == 0) {
+      //enable interrupts
+      return -1;
+    }
+  }
+  for(i=0; i < P1_MAXSEM; i++) {
+    if (semTable[i].inUse == 0) {
+      semTable[i].count = value;
+      semTable[i].queue = NULL;
+      semTable[i].inUse = 1;
+      semTable[i].name = malloc(strlen(name)+1);
+      strcpy(semTable[i].name, name);
+      //enable interrupts
+      return 0;
+    }
+  }
+  //enable interrupts
+  return -2
+}
+
+int P1_SemFree(P1_Semaphore sem) {
+  //disable interrupts
+  if( checkInvaildSemaphore(sem) ) {
+    //enable interrupts
+    return -1;
+  }
+  Semaphore *s = (Semaphore *) sem;
+  if (s->queue != NULL) {
+    //enable interrupts
+    return -2;
+  }
+  s->inUse = 0;
+  s->count = 0;
+  free(sem->name);
+  //enable interrupts
+  return 0;
+}
+
+/* 
+  ------------------------------------
+  Name - P1_P
+  Purpose - P function for semaphores
+  Parameters - a semaphore
+  Returns - function status
+  ------------------------------------
+*/
+int P1_P(P1_Semaphore sem) {
+  if ( checkInvaildSemaphore(sem) ){
+    return -1;
+  }
+  Semaphore *s = (Semaphore *) sem;
+  while (1) {
+    //disable interrupts
+    if (s->count > 0) {
+      s->count--;
+      break;
+    }
+    // add to queue
+    // block process
+    // pass reference to sem to process
+    // enable interrupts
+    dispatcher();
+  }
+  //unblock process
+  //dereference sem from process
+  //enable interrupts
+  return 0;
+}
+
+int P1_V(P1_Semaphore sem) {
+  if ( checkInvaildSemaphore() ) {
+      return -1;
+  }
+  Semaphore *s = (Semaphore *) sem;
+  //disable interrupts
+  s->count++;
+  if (s->queue != NULL) {
+    //get process off semaphore queue
+    //add process to ready queue;
+    //enable interrupts
+    dispatcher();
+  } else {
+    //enable interrupts
+  }
+  return 0;
+}
+
+int checkInvaildSemaphore (P1_Semaphore) {
+  if (sem == NULL) {
+    return 1;
+  }
+  int i;
+  for (i=0; i<P1_MAXSEM; i++) {
+    if (&(semTable[i]) == sem) {
+      if(semTable[i].inUse == 1) {
+        return 0;
+      } else { 
+        return 1;
+      }
+    }
+  }
+  return 1;
 }
